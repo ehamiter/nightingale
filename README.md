@@ -11,6 +11,7 @@ Built with Rust and the Iced GUI framework.
 - 🔍 Search YouTube with natural language queries or paste URLs/playlists
 - 📊 Smart ranking of results (official audio versions prioritized)
 - 💾 Download videos as MP3 files
+- 📱 **One-click transfer to iPhone** (AirDrop on macOS, Wi-Fi on Linux)
 - 🎨 Clean, native desktop interface
 - 📝 Customizable filenames before download
 - 📋 View detailed download logs for troubleshooting
@@ -49,7 +50,28 @@ cargo build --release
 1. **Search**: Enter an artist/song name or paste a YouTube URL/playlist
 2. **Preview**: Results are ranked by relevance (official audio prioritized)
 3. **Download**: Click "Download MP3" and customize the filename
-4. **Troubleshoot**: View logs if downloads fail
+4. **Transfer to iPhone** (optional):
+   - **macOS**: Click "Send via AirDrop" for instant wireless transfer
+   - **Linux**: Click "Share via Wi-Fi" and scan the QR code with your iPhone camera
+5. **Troubleshoot**: View logs if downloads fail
+
+### Transferring to iPhone
+
+After downloading an MP3, a green share button appears for that track:
+
+**On macOS:**
+- Click "Send via AirDrop"
+- The macOS share sheet opens automatically
+- Select your iPhone from the AirDrop options
+- Accept on your iPhone
+
+**On Linux:**
+- Click "Share via Wi-Fi"
+- A QR code appears on screen
+- Scan the QR code with your iPhone camera
+- Tap the notification to download the file
+
+**Note:** Files transferred this way go to your iPhone's Downloads folder. They won't automatically appear in the Music app. Use VLC or the Files app for playback, or manually import them to Music.
 
 ## Requirements
 

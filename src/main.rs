@@ -1,3 +1,5 @@
+#![allow(unexpected_cfgs)]
+
 use iced::{
     Element, Task,
     widget::{button, column, container, image, row, scrollable, text, text_input, Image},
@@ -13,6 +15,11 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tokio::sync::mpsc;
+
+mod macos_share;
+mod wifi_share;
+
+use wifi_share::ShareServer;
 
 // Config for persistent settings
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -720,6 +727,8 @@ enum Message {
     RenameFilenameChanged(String),
     ConfirmDownload,
     CancelRename,
+    ShareFile(String), // video_id
+    CloseShare,
 }
 
 struct Songbird {
@@ -732,6 +741,7 @@ struct Songbird {
     download_messages: HashMap<String, String>, // video_id -> status message
     download_progress: HashMap<String, f32>, // video_id -> progress (0-100)
     download_logs: HashMap<String, Vec<String>>, // video_id -> log lines
+    downloaded_files: HashMap<String, PathBuf>, // video_id -> file path
     config: Config,
     show_settings: bool,
     show_logs_for: Option<String>, // video_id to show logs for
@@ -742,11 +752,18 @@ struct Songbird {
     player_logs: Vec<String>,
     show_player_logs: bool,
     rename_modal: Option<RenameModal>,
+    share_modal: Option<ShareModal>,
 }
 
 struct RenameModal {
     video_id: String,
     filename: String,
+}
+
+struct ShareModal {
+    server: Option<ShareServer>,
+    qr_code: String,
+    url: String,
 }
 
 impl Songbird {
@@ -771,6 +788,7 @@ impl Songbird {
             download_messages: HashMap::new(),
             download_progress: HashMap::new(),
             download_logs: HashMap::new(),
+            downloaded_files: HashMap::new(),
             config: Config::load(),
             show_settings: false,
             show_logs_for: None,
@@ -781,6 +799,7 @@ impl Songbird {
             player_logs: Vec::new(),
             show_player_logs: false,
             rename_modal: None,
+            share_modal: None,
         };
         
         (app, focus_task)
@@ -930,7 +949,17 @@ impl Songbird {
                 self.download_progress.remove(&video_id);
                 match result {
                     Ok(msg) => {
-                        self.download_messages.insert(video_id, msg);
+                        self.download_messages.insert(video_id.clone(), msg);
+                        
+                        // Store the downloaded file path
+                        if let Some(download_dir) = &self.config.download_directory {
+                            // Find the video result to get the filename
+                            if let Some(video) = self.search_results.iter().find(|v| v.video_id == video_id) {
+                                let filename = clean_filename(&video.title);
+                                let file_path = download_dir.join(format!("{}.mp3", filename));
+                                self.downloaded_files.insert(video_id, file_path);
+                            }
+                        }
                     }
                     Err(e) => {
                         self.download_messages.insert(video_id, format!("Error: {}", e));
@@ -1059,6 +1088,56 @@ impl Songbird {
                 }
                 Task::none()
             }
+            Message::ShareFile(video_id) => {
+                // Get the file path for this video
+                if let Some(file_path) = self.downloaded_files.get(&video_id) {
+                    #[cfg(target_os = "macos")]
+                    {
+                        // On macOS, try to use AirDrop
+                        match macos_share::share_file_via_airdrop(file_path) {
+                            Ok(()) => {
+                                // AirDrop picker shown successfully
+                                return Task::none();
+                            }
+                            Err(e) => {
+                                // Fall back to Wi-Fi share on error
+                                eprintln!("AirDrop failed: {}, falling back to Wi-Fi share", e);
+                            }
+                        }
+                    }
+                    
+                    // On Linux or if macOS AirDrop fails, use Wi-Fi share
+                    match ShareServer::new(file_path) {
+                        Ok(server) => {
+                            let qr_code = server.generate_qr_code().unwrap_or_else(|_| "QR code generation failed".to_string());
+                            let url = server.get_url().unwrap_or_else(|_| "URL unavailable".to_string());
+                            
+                            if let Err(e) = server.start() {
+                                eprintln!("Failed to start share server: {}", e);
+                                return Task::none();
+                            }
+                            
+                            self.share_modal = Some(ShareModal {
+                                server: Some(server),
+                                qr_code,
+                                url,
+                            });
+                        }
+                        Err(e) => {
+                            eprintln!("Failed to create share server: {}", e);
+                        }
+                    }
+                }
+                Task::none()
+            }
+            Message::CloseShare => {
+                if let Some(modal) = self.share_modal.take() {
+                    if let Some(server) = modal.server {
+                        server.stop();
+                    }
+                }
+                Task::none()
+            }
 
         }
     }
@@ -1088,6 +1167,10 @@ impl Songbird {
         
         if self.show_settings {
             return self.settings_view();
+        }
+        
+        if let Some(modal) = &self.share_modal {
+            return self.share_modal_view(modal);
         }
         
         if let Some(modal) = &self.rename_modal {
@@ -1219,6 +1302,34 @@ impl Songbird {
                     None
                 };
                 
+                // Share button - show if file has been downloaded
+                let share_button = if self.downloaded_files.contains_key(&video.video_id) {
+                    let button_text = if cfg!(target_os = "macos") {
+                        "Send via AirDrop"
+                    } else {
+                        "Share via Wi-Fi"
+                    };
+                    
+                    Some(button(text(button_text).size(12))
+                        .on_press(Message::ShareFile(video.video_id.clone()))
+                        .padding(6)
+                        .style(|_theme, status| button::Style {
+                            background: Some(iced::Background::Color(match status {
+                                button::Status::Hovered => iced::Color::from_rgb(0.3, 0.7, 0.3),
+                                _ => iced::Color::from_rgb(0.2, 0.6, 0.2),
+                            })),
+                            text_color: iced::Color::WHITE,
+                            border: iced::Border {
+                                color: iced::Color::TRANSPARENT,
+                                width: 0.0,
+                                radius: 4.0.into(),
+                            },
+                            shadow: iced::Shadow::default(),
+                        }))
+                } else {
+                    None
+                };
+                
                 let mut info_column = column![
                     video_title,
                     video_channel,
@@ -1232,6 +1343,10 @@ impl Songbird {
                 
                 if let Some(logs_btn) = view_logs_button {
                     info_column = info_column.push(logs_btn);
+                }
+                
+                if let Some(share_btn) = share_button {
+                    info_column = info_column.push(share_btn);
                 }
                 
                 // Show downloading indicator
@@ -1606,6 +1721,89 @@ impl Songbird {
             .height(Length::Fill)
             .style(|_theme| container::Style {
                 background: Some(iced::Background::Color(iced::Color::from_rgb(0.1, 0.1, 0.1))),
+                ..Default::default()
+            })
+            .into()
+    }
+    
+    fn share_modal_view<'a>(&'a self, modal: &'a ShareModal) -> Element<'a, Message> {
+        let platform = if cfg!(target_os = "macos") {
+            "macOS"
+        } else {
+            "Linux"
+        };
+        
+        let title = text(format!("Share File - {}", platform))
+            .size(28);
+        
+        let instruction = if cfg!(target_os = "macos") {
+            text("AirDrop share sheet opened. If it didn't appear, use the Wi-Fi method below:")
+                .size(14)
+                .style(|_theme| text::Style {
+                    color: Some(iced::Color::from_rgb(0.6, 0.6, 0.6)),
+                })
+        } else {
+            text("Scan the QR code with your iPhone camera to download the file")
+                .size(14)
+                .style(|_theme| text::Style {
+                    color: Some(iced::Color::from_rgb(0.6, 0.6, 0.6)),
+                })
+        };
+        
+        let url_text = text(format!("URL: {}", modal.url))
+            .size(14)
+            .style(|_theme| text::Style {
+                color: Some(iced::Color::from_rgb(0.4, 0.6, 0.9)),
+            });
+        
+        let qr_display = text(&modal.qr_code)
+            .size(10)
+            .font(iced::Font::MONOSPACE)
+            .style(|_theme| text::Style {
+                color: Some(iced::Color::WHITE),
+            });
+        
+        let qr_container = container(qr_display)
+            .padding(20)
+            .style(|_theme| container::Style {
+                background: Some(iced::Background::Color(iced::Color::WHITE)),
+                border: iced::Border {
+                    color: iced::Color::from_rgb(0.8, 0.8, 0.8),
+                    width: 2.0,
+                    radius: 8.0.into(),
+                },
+                ..Default::default()
+            });
+        
+        let info_text = text("Note: The file will download to your iPhone's Downloads folder.\nIt won't be added to the Music app automatically.")
+            .size(12)
+            .style(|_theme| text::Style {
+                color: Some(iced::Color::from_rgb(0.7, 0.5, 0.3)),
+            });
+        
+        let close_button = button(text("Close").size(16))
+            .on_press(Message::CloseShare)
+            .padding(10);
+        
+        let modal_content = column![
+            title,
+            instruction,
+            url_text,
+            qr_container,
+            info_text,
+            close_button,
+        ]
+        .spacing(20)
+        .padding(30)
+        .max_width(600);
+        
+        container(modal_content)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .center_x(Length::Fill)
+            .center_y(Length::Fill)
+            .style(|_theme| container::Style {
+                background: Some(iced::Background::Color(iced::Color::from_rgba(0.0, 0.0, 0.0, 0.9))),
                 ..Default::default()
             })
             .into()

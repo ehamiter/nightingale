@@ -25,3 +25,10 @@ dirs = "5.0"
 open = "5.0"
 rfd = "0.15"
 rodio = "0.19"
+tiny_http = "0.12"
+qrcode = "0.14"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc = "0.2"
+cocoa = "0.25"
+objc-foundation = "0.1"
