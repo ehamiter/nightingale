@@ -294,6 +294,8 @@ fn download_mp3_stream_with_filename(video_id: String, download_dir: PathBuf, fi
         let result = async {
             let mut cmd = Command::new(&ytdlp_path);
             cmd.arg("-x")
+                .arg("--extractor-args")
+                .arg("youtube:player_client=ios,android")
                 .arg("--audio-format")
                 .arg("mp3")
                 .arg("--no-playlist")

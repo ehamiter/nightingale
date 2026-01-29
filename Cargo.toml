@@ -1,6 +1,6 @@
 [package]
 name = "nightingale"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 authors = ["Eric Hamiter <ehamiter@gmail.com>"]
 description = "A desktop application for searching YouTube videos and downloading them as MP3 files"
